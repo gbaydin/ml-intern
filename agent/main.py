@@ -13,6 +13,7 @@ import os
 import signal
 import sys
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -42,12 +43,33 @@ from agent.utils.terminal_display import (
     print_tool_output,
     print_turn_complete,
     print_yolo_approve,
+    is_plain_output,
+    set_plain_output,
+    should_use_plain_output,
 )
 
 litellm.drop_params = True
 # Suppress the "Give Feedback / Get Help" banner LiteLLM prints to stderr
 # on every error — users don't need it, and our friendly errors cover the case.
 litellm.suppress_debug_info = True
+
+
+def _configure_warning_filters() -> None:
+    # Suppress litellm pydantic deprecation warnings
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="litellm")
+    # Suppress pydantic serializer warnings emitted by provider response objects.
+    # They are noisy diagnostics about nested usage metadata and do not affect the
+    # agent loop, while printing them mid-turn breaks the terminal transcript.
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Pydantic serializer warnings:.*",
+        category=UserWarning,
+    )
+    # Suppress whoosh invalid escape sequence warnings (third-party, unfixed upstream)
+    warnings.filterwarnings("ignore", category=SyntaxWarning, module="whoosh")
+
+
+_configure_warning_filters()
 
 # ── Suggested models shown by `/model` (not a gate) ──────────────────────
 # Users can paste any HF model id (e.g. "MiniMaxAI/MiniMax-M2.7") or use one
@@ -263,12 +285,16 @@ class _ThinkingShimmer:
         self._running = False
 
     def start(self):
+        if is_plain_output():
+            return
         if self._running:
             return
         self._running = True
         self._task = asyncio.ensure_future(self._animate())
 
     def stop(self):
+        if is_plain_output():
+            return
         if not self._running:
             return  # no-op when never started (e.g. headless mode)
         self._running = False
@@ -918,7 +944,8 @@ async def main():
     """Interactive chat with the agent"""
 
     # Clear screen
-    os.system("clear" if os.name != "nt" else "cls")
+    if not is_plain_output():
+        os.system("clear" if os.name != "nt" else "cls")
 
     # Create prompt session for input (needed early for token prompt)
     prompt_session = PromptSession()
@@ -1139,10 +1166,12 @@ async def headless_main(
     model: str | None = None,
     max_iterations: int | None = None,
     stream: bool = True,
+    plain_output: bool = True,
 ) -> None:
     """Run a single prompt headlessly and exit."""
     import logging
 
+    set_plain_output(plain_output)
     logging.basicConfig(level=logging.WARNING)
 
     hf_token = _get_hf_token()
@@ -1262,9 +1291,14 @@ async def headless_main(
                     buf = _hl_research_buffers.pop(aid, None)
                     if buf is not None:
                         f = get_console().file
-                        f.write(f"  \033[38;2;255;200;80m▸ {buf['label']}\033[0m\n")
-                        for call in buf["calls"]:
-                            f.write(f"    \033[2m{call}\033[0m\n")
+                        if is_plain_output():
+                            f.write(f"  ▸ {buf['label']}\n")
+                            for call in buf["calls"]:
+                                f.write(f"    {call}\n")
+                        else:
+                            f.write(f"  \033[38;2;255;200;80m▸ {buf['label']}\033[0m\n")
+                            for call in buf["calls"]:
+                                f.write(f"    \033[2m{call}\033[0m\n")
                         f.flush()
                 elif log.startswith("tokens:") or log.startswith("tools:"):
                     pass  # stats updates — only useful for the live display
@@ -1326,13 +1360,9 @@ async def headless_main(
 def cli():
     """Entry point for the ml-intern CLI command."""
     import logging as _logging
-    import warnings
     # Suppress aiohttp "Unclosed client session" noise during event loop teardown
     _logging.getLogger("asyncio").setLevel(_logging.CRITICAL)
-    # Suppress litellm pydantic deprecation warnings
-    warnings.filterwarnings("ignore", category=DeprecationWarning, module="litellm")
-    # Suppress whoosh invalid escape sequence warnings (third-party, unfixed upstream)
-    warnings.filterwarnings("ignore", category=SyntaxWarning, module="whoosh")
+    _configure_warning_filters()
 
     parser = argparse.ArgumentParser(description="Hugging Face Agent CLI")
     parser.add_argument("prompt", nargs="?", default=None, help="Run headlessly with this prompt")
@@ -1341,14 +1371,31 @@ def cli():
                         help="Max LLM requests per turn (default: 50, use -1 for unlimited)")
     parser.add_argument("--no-stream", action="store_true",
                         help="Disable token streaming (use non-streaming LLM calls)")
+    parser.add_argument("--plain", action="store_true",
+                        help="Use append-only output with no terminal animations or cursor redraws")
+    parser.add_argument("--fancy", action="store_true",
+                        help="Force animated terminal output even when plain output would be auto-selected")
     args = parser.parse_args()
+    if args.plain and args.fancy:
+        parser.error("--plain and --fancy cannot be used together")
+
+    plain_output = args.plain or (not args.fancy and should_use_plain_output())
+    if args.prompt and not args.fancy:
+        plain_output = True
+    set_plain_output(plain_output)
 
     try:
         if args.prompt:
             max_iter = args.max_iterations
             if max_iter is not None and max_iter < 0:
                 max_iter = 10_000  # effectively unlimited
-            asyncio.run(headless_main(args.prompt, model=args.model, max_iterations=max_iter, stream=not args.no_stream))
+            asyncio.run(headless_main(
+                args.prompt,
+                model=args.model,
+                max_iterations=max_iter,
+                stream=not args.no_stream,
+                plain_output=plain_output,
+            ))
         else:
             asyncio.run(main())
     except KeyboardInterrupt:

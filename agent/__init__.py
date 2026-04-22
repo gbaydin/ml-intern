@@ -2,6 +2,16 @@
 HF Agent - Main agent module
 """
 
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="litellm")
+warnings.filterwarnings("ignore", category=SyntaxWarning, module="whoosh")
+warnings.filterwarnings(
+    "ignore",
+    message=r"Pydantic serializer warnings:.*",
+    category=UserWarning,
+)
+
 import litellm
 
 # Global LiteLLM behavior — set once at package import so both CLI and

@@ -52,7 +52,12 @@ ml-intern "fine-tune llama on my dataset"
 ml-intern --model anthropic/claude-opus-4-6 "your prompt"
 ml-intern --max-iterations 100 "your prompt"
 ml-intern --no-stream "your prompt"
+ml-intern --plain
 ```
+
+Interactive mode automatically uses plain, append-only output over SSH and in
+non-TTY/CI environments. Use `--plain` or `ML_INTERN_PLAIN=1` to force it, or
+`--fancy` / `ML_INTERN_FANCY=1` to force the animated terminal UI.
 
 ## Architecture
 

@@ -2,7 +2,11 @@
 Terminal display utilities — rich-powered CLI formatting.
 """
 
+import os
 import re
+import sys
+from contextlib import contextmanager
+from typing import Iterator
 
 from rich.console import Console
 from rich.markdown import Heading, Markdown
@@ -75,7 +79,44 @@ _THEME = Theme({
     "markdown.h3": "bold rgb(220,165,100)",
 })
 
-_console = Console(theme=_THEME, highlight=False)
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
+
+
+def _env_flag(name: str) -> bool | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    return None
+
+
+def should_use_plain_output() -> bool:
+    """Return whether the current terminal should avoid cursor-addressed UI."""
+    plain_env = _env_flag("ML_INTERN_PLAIN")
+    if plain_env is not None:
+        return plain_env
+    fancy_env = _env_flag("ML_INTERN_FANCY")
+    if fancy_env:
+        return False
+    term = os.environ.get("TERM", "").lower()
+    if term in {"", "dumb"}:
+        return True
+    if not sys.stdout.isatty():
+        return True
+    if os.environ.get("CI"):
+        return True
+    # SSH terminals vary a lot, and broken cursor redraws make the CLI nearly
+    # unusable. Use append-only output by default; ML_INTERN_FANCY=1 opts back in.
+    return any(os.environ.get(k) for k in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"))
+
+
+_plain_output = should_use_plain_output()
+_console = Console(theme=_THEME, highlight=False, no_color=_plain_output)
 
 # Indent prefix for all agent output (aligns under the `>` prompt)
 _I = "  "
@@ -85,10 +126,43 @@ def get_console() -> Console:
     return _console
 
 
+def is_plain_output() -> bool:
+    return _plain_output
+
+
+def set_plain_output(enabled: bool) -> None:
+    global _plain_output
+    _plain_output = enabled
+    _console.no_color = enabled
+
+
+@contextmanager
+def _without_live_region() -> Iterator[None]:
+    manager = globals().get("_subagent_display")
+    if manager is None or _plain_output:
+        yield
+        return
+    manager.suspend()
+    try:
+        yield
+    finally:
+        manager.resume()
+
+
 # ── Banner ─────────────────────────────────────────────────────────────
 
 def print_banner(model: str | None = None, hf_user: str | None = None) -> None:
     """Print particle logo then CRT boot sequence with system info."""
+    model_label = model or "anthropic/claude-opus-4-6"
+    user_label = hf_user or "not logged in"
+
+    if _plain_output:
+        _console.print(f"{_I}ML Intern")
+        _console.print(f"{_I}  User: {user_label}")
+        _console.print(f"{_I}  Model: {model_label}")
+        _console.print(f"{_I}/help for commands · /model to switch · /quit to exit")
+        return
+
     from agent.utils.particle_logo import run_particle_logo
     from agent.utils.crt_boot import run_boot_sequence
 
@@ -98,9 +172,6 @@ def print_banner(model: str | None = None, hf_user: str | None = None) -> None:
     # Clear screen for CRT boot — starts from top
     _console.file.write("\033[2J\033[H")
     _console.file.flush()
-
-    model_label = model or "anthropic/claude-opus-4-6"
-    user_label = hf_user or "not logged in"
 
     # Warm gold palette matching the shimmer highlight (255, 200, 80)
     gold = "rgb(255,200,80)"
@@ -122,6 +193,10 @@ def print_banner(model: str | None = None, hf_user: str | None = None) -> None:
 
 def print_init_done(tool_count: int = 0) -> None:
     import time
+    if _plain_output:
+        _console.print(f"{_I}  Tools: {tool_count} loaded")
+        _console.print(f"{_I}Ready.")
+        return
     f = _console.file
     # Overwrite the "Tools: loading..." line with actual count
     f.write(f"\033[A\033[A\033[A\033[K")  # Move up 3 lines (blank + help + blank) then up to tools line
@@ -145,17 +220,21 @@ def print_init_done(tool_count: int = 0) -> None:
 
 def print_tool_call(tool_name: str, args_preview: str) -> None:
     import time
-    f = _console.file
-    # CRT-style: type out tool name in HF yellow
-    gold = "\033[38;2;255;200;80m"
-    reset = "\033[0m"
-    f.write(f"{_I}{gold}▸ ")
-    for ch in tool_name:
-        f.write(ch)
+    if _plain_output:
+        _console.print(f"{_I}▸ [tool.name]{tool_name}[/tool.name]  [tool.args]{args_preview}[/tool.args]")
+        return
+    with _without_live_region():
+        f = _console.file
+        # CRT-style: type out tool name in HF yellow
+        gold = "\033[38;2;255;200;80m"
+        reset = "\033[0m"
+        f.write(f"{_I}{gold}▸ ")
+        for ch in tool_name:
+            f.write(ch)
+            f.flush()
+            time.sleep(0.015)
+        f.write(f"{reset}  \033[2m{args_preview}{reset}\n")
         f.flush()
-        time.sleep(0.015)
-    f.write(f"{reset}  \033[2m{args_preview}{reset}\n")
-    f.flush()
 
 
 def print_tool_output(output: str, success: bool, truncate: bool = True) -> None:
@@ -164,7 +243,8 @@ def print_tool_output(output: str, success: bool, truncate: bool = True) -> None
     style = "tool.ok" if success else "tool.fail"
     # Indent each line of tool output
     indented = "\n".join(f"{_I}  {line}" for line in output.split("\n"))
-    _console.print(f"[{style}]{indented}[/{style}]")
+    with _without_live_region():
+        _console.print(f"[{style}]{indented}[/{style}]")
 
 
 class SubAgentDisplayManager:
@@ -180,10 +260,9 @@ class SubAgentDisplayManager:
     def __init__(self):
         self._agents: dict[str, dict] = {}  # agent_id -> state dict
         self._lines_on_screen = 0
-        self._ticker_task = None
+        self._suspend_count = 0
 
     def start(self, agent_id: str, label: str = "research") -> None:
-        import asyncio
         import time
         self._agents[agent_id] = {
             "label": label,
@@ -192,21 +271,27 @@ class SubAgentDisplayManager:
             "token_count": 0,
             "start_time": time.monotonic(),
         }
-        if not self._ticker_task:
-            self._ticker_task = asyncio.ensure_future(self._tick())
+        if _plain_output:
+            _console.print(f"{_I}▸ {label}")
+            return
         self._redraw()
 
     def set_tokens(self, agent_id: str, tokens: int) -> None:
         if agent_id in self._agents:
             self._agents[agent_id]["token_count"] = tokens
+            self._redraw()
 
     def set_tool_count(self, agent_id: str, count: int) -> None:
         if agent_id in self._agents:
             self._agents[agent_id]["tool_count"] = count
+            self._redraw()
 
     def add_call(self, agent_id: str, tool_desc: str) -> None:
         if agent_id in self._agents:
             self._agents[agent_id]["calls"].append(tool_desc)
+            if _plain_output:
+                _console.print(f"{_I}  [dim]{tool_desc}[/dim]")
+                return
             self._redraw()
 
     def clear(self, agent_id: str) -> None:
@@ -215,6 +300,10 @@ class SubAgentDisplayManager:
         # the user sees each sub-agent finish cleanly without the tool-call
         # noise, then redraw remaining live agents.
         agent = self._agents.pop(agent_id, None)
+        if _plain_output:
+            if agent is not None:
+                _console.print(self._render_completion_text(agent))
+            return
         self._erase()
         if agent is not None:
             width = max(10, _console.width)
@@ -222,12 +311,27 @@ class SubAgentDisplayManager:
             _console.file.write(line + "\n")
             _console.file.flush()
         self._lines_on_screen = 0
-        if not self._agents:
-            if self._ticker_task:
-                self._ticker_task.cancel()
-                self._ticker_task = None
-        else:
+        if self._agents:
             self._redraw()
+
+    def suspend(self) -> None:
+        self._suspend_count += 1
+        if self._suspend_count == 1:
+            self._erase()
+            self._lines_on_screen = 0
+
+    def resume(self) -> None:
+        if self._suspend_count == 0:
+            return
+        self._suspend_count -= 1
+        if self._suspend_count == 0 and self._agents:
+            self._redraw()
+
+    @staticmethod
+    def _render_completion_text(agent: dict) -> str:
+        stats = SubAgentDisplayManager._format_stats(agent)
+        label = agent["label"]
+        return f"{_I}✓ {label}" + (f"  ({stats})" if stats else "")
 
     @staticmethod
     def _render_completion_line(agent: dict) -> str:
@@ -238,16 +342,6 @@ class SubAgentDisplayManager:
         if stats:
             line += f"  \033[2m({stats})\033[0m"
         return line
-
-    async def _tick(self) -> None:
-        import asyncio
-        try:
-            while True:
-                await asyncio.sleep(1.0)
-                if self._agents:
-                    self._redraw()
-        except asyncio.CancelledError:
-            pass
 
     @staticmethod
     def _format_stats(agent: dict) -> str:
@@ -300,6 +394,8 @@ class SubAgentDisplayManager:
         return lines
 
     def _redraw(self) -> None:
+        if _plain_output or self._suspend_count > 0:
+            return
         f = _console.file
         self._erase()
         compact = len(self._agents) > 1
@@ -326,13 +422,20 @@ def print_tool_log(tool: str, log: str, agent_id: str = "", label: str = "") -> 
         elif log == "Research complete.":
             _subagent_display.clear(aid)
         elif log.startswith("tokens:"):
-            _subagent_display.set_tokens(aid, int(log[7:]))
+            try:
+                _subagent_display.set_tokens(aid, int(log[7:]))
+            except ValueError:
+                pass
         elif log.startswith("tools:"):
-            _subagent_display.set_tool_count(aid, int(log[6:]))
+            try:
+                _subagent_display.set_tool_count(aid, int(log[6:]))
+            except ValueError:
+                pass
         else:
             _subagent_display.add_call(aid, log)
     else:
-        _console.print(f"{_I}[dim]{tool}: {log}[/dim]")
+        with _without_live_region():
+            _console.print(f"{_I}[dim]{tool}: {log}[/dim]")
 
 
 # ── Messages ───────────────────────────────────────────────────────────
@@ -346,62 +449,65 @@ async def print_markdown(
     import io, random
     from rich.padding import Padding
 
-    _console.print()
+    with _without_live_region():
+        _console.print()
 
-    # Render markdown to a string buffer so we can type it out
-    buf = io.StringIO()
-    # Important: StringIO is not a TTY, so Rich would normally strip styles.
-    # Force terminal rendering so ANSI style codes are preserved for typewriter output.
-    buf_console = Console(
-        file=buf,
-        width=_console.width,
-        highlight=False,
-        theme=_THEME,
-        force_terminal=True,
-        color_system=_console.color_system or "truecolor",
-    )
-    buf_console.print(Padding(Markdown(text), (0, 0, 0, 2)))
-    rendered = buf.getvalue()
+        # Render markdown to a string buffer so we can type it out
+        buf = io.StringIO()
+        # Important: StringIO is not a TTY, so Rich would normally strip styles.
+        # Force terminal rendering only in fancy mode so plain output stays log-safe.
+        buf_console = Console(
+            file=buf,
+            width=_console.width,
+            highlight=False,
+            theme=_THEME,
+            force_terminal=not _plain_output,
+            color_system=_console.color_system or "truecolor",
+            no_color=_plain_output,
+        )
+        buf_console.print(Padding(Markdown(text), (0, 0, 0, 2)))
+        rendered = buf.getvalue()
 
-    # Strip trailing whitespace from each line so we don't type across the full width
-    lines = rendered.split("\n")
-    rendered = "\n".join(line.rstrip() for line in lines)
+        # Strip trailing whitespace from each line so we don't type across the full width
+        lines = rendered.split("\n")
+        rendered = "\n".join(line.rstrip() for line in lines)
 
-    f = _console.file
+        f = _console.file
 
-    # Headless / non-interactive: dump the rendered markdown in one write.
-    if instant:
-        f.write(rendered)
-        f.write("\n")
+        # Headless/plain/non-interactive: dump the rendered markdown in one write.
+        if instant or _plain_output:
+            f.write(rendered)
+            f.write("\n")
+            f.flush()
+            return
+
+        # CRT typewriter effect — async so the event loop can service signal
+        # handlers (Ctrl+C during streaming) between characters. If cancelled
+        # mid-type, stop cleanly: write an ANSI reset so half-open color state
+        # doesn't bleed onto the "interrupted" line, and return.
+        rng = random.Random(42)
+        cancelled = False
+        for ch in rendered:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                break
+            f.write(ch)
+            f.flush()
+            if ch == "\n":
+                await asyncio.sleep(0.002)
+            elif ch == " ":
+                await asyncio.sleep(0.002)
+            elif rng.random() < 0.03:
+                await asyncio.sleep(0.015)
+            else:
+                await asyncio.sleep(0.004)
+        f.write("\033[0m\n" if cancelled else "\n")
         f.flush()
-        return
-
-    # CRT typewriter effect — async so the event loop can service signal
-    # handlers (Ctrl+C during streaming) between characters. If cancelled
-    # mid-type, stop cleanly: write an ANSI reset so half-open color state
-    # doesn't bleed onto the "interrupted" line, and return.
-    rng = random.Random(42)
-    cancelled = False
-    for ch in rendered:
-        if cancel_event is not None and cancel_event.is_set():
-            cancelled = True
-            break
-        f.write(ch)
-        f.flush()
-        if ch == "\n":
-            await asyncio.sleep(0.002)
-        elif ch == " ":
-            await asyncio.sleep(0.002)
-        elif rng.random() < 0.03:
-            await asyncio.sleep(0.015)
-        else:
-            await asyncio.sleep(0.004)
-    f.write("\033[0m\n" if cancelled else "\n")
-    f.flush()
 
 
 def print_error(message: str) -> None:
-    _console.print(f"\n{_I}[bold red]Error:[/bold red] {message}")
+    with _without_live_region():
+        _console.print(f"\n{_I}[bold red]Error:[/bold red] {message}")
 
 
 def print_turn_complete() -> None:
@@ -409,27 +515,32 @@ def print_turn_complete() -> None:
 
 
 def print_interrupted() -> None:
-    _console.print(f"\n{_I}[dim italic]interrupted[/dim italic]")
+    with _without_live_region():
+        _console.print(f"\n{_I}[dim italic]interrupted[/dim italic]")
 
 
 def print_compacted(old_tokens: int, new_tokens: int) -> None:
-    _console.print(f"{_I}[dim]context compacted: {old_tokens:,} → {new_tokens:,} tokens[/dim]")
+    with _without_live_region():
+        _console.print(f"{_I}[dim]context compacted: {old_tokens:,} → {new_tokens:,} tokens[/dim]")
 
 
 # ── Approval ───────────────────────────────────────────────────────────
 
 def print_approval_header(count: int) -> None:
     label = f"Approval required — {count} item{'s' if count != 1 else ''}"
-    _console.print()
-    _console.print(f"{_I}", Panel(f"[bold yellow]{label}[/bold yellow]", border_style="yellow", expand=False))
+    with _without_live_region():
+        _console.print()
+        _console.print(f"{_I}", Panel(f"[bold yellow]{label}[/bold yellow]", border_style="yellow", expand=False))
 
 
 def print_approval_item(index: int, total: int, tool_name: str, operation: str) -> None:
-    _console.print(f"\n{_I}[bold]\\[{index}/{total}][/bold]  [tool.name]{tool_name}[/tool.name]  {operation}")
+    with _without_live_region():
+        _console.print(f"\n{_I}[bold]\\[{index}/{total}][/bold]  [tool.name]{tool_name}[/tool.name]  {operation}")
 
 
 def print_yolo_approve(count: int) -> None:
-    _console.print(f"{_I}[bold yellow]yolo →[/bold yellow] auto-approved {count} item(s)")
+    with _without_live_region():
+        _console.print(f"{_I}[bold yellow]yolo →[/bold yellow] auto-approved {count} item(s)")
 
 
 # ── Help ───────────────────────────────────────────────────────────────
@@ -447,9 +558,10 @@ HELP_TEXT = f"""\
 
 
 def print_help() -> None:
-    _console.print()
-    _console.print(HELP_TEXT)
-    _console.print()
+    with _without_live_region():
+        _console.print()
+        _console.print(HELP_TEXT)
+        _console.print()
 
 
 # ── Plan display ───────────────────────────────────────────────────────
@@ -482,7 +594,8 @@ def format_plan_display() -> str:
 def print_plan() -> None:
     plan_str = format_plan_display()
     if plan_str:
-        _console.print(plan_str)
+        with _without_live_region():
+            _console.print(plan_str)
 
 
 # ── Formatting for plan_tool output (used by plan_tool handler) ────────
