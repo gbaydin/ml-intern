@@ -645,12 +645,14 @@ class Handlers:
                     )
 
                 # If no tool calls, add assistant message and we're done
+                # (unless auto_continue is on — then nudge the model to keep working)
                 if not tool_calls:
                     logger.debug(
-                        "Agent loop ending: no tool calls. "
+                        "Agent loop: no tool calls. "
                         "finish_reason=%s, token_count=%d, "
                         "usage=%d, model_max_tokens=%d, "
                         "iteration=%d/%d, "
+                        "auto_continue=%s, "
                         "response_text=%s",
                         finish_reason,
                         token_count,
@@ -658,12 +660,33 @@ class Handlers:
                         session.context_manager.model_max_tokens,
                         iteration,
                         max_iterations,
+                        session.config.auto_continue,
                         (content or "")[:500],
                     )
                     if content:
                         assistant_msg = Message(role="assistant", content=content)
                         session.context_manager.add_message(assistant_msg, token_count)
                         final_response = content
+
+                    if session.config.auto_continue:
+                        session.context_manager.add_message(
+                            Message(
+                                role="user",
+                                content=(
+                                    "[SYSTEM: You stopped without calling any tools. "
+                                    "A text-only response ends the agent loop — there is no human to re-prompt you. "
+                                    "Keep working: check your plan, verify outputs, iterate on results, "
+                                    "or research further improvements. You MUST call at least one tool.]"
+                                ),
+                            )
+                        )
+                        await session.send_event(Event(
+                            event_type="tool_log",
+                            data={"tool": "system", "log": "Auto-continue: nudging agent to keep working"},
+                        ))
+                        iteration += 1
+                        continue
+
                     break
 
                 # Validate tool call args (one json.loads per call, once)

@@ -758,6 +758,12 @@ async def _handle_slash_command(
         print(f"YOLO mode: {state}")
         return None
 
+    if command == "/autocontinue":
+        config.auto_continue = not config.auto_continue
+        state = "ON" if config.auto_continue else "OFF"
+        print(f"Auto-continue: {state}")
+        return None
+
     if command == "/effort":
         console = get_console()
         valid = {"minimal", "low", "medium", "high", "xhigh", "max", "off"}
@@ -1047,6 +1053,7 @@ async def headless_main(
     config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
     config = load_config(config_path)
     config.yolo_mode = True  # Auto-approve everything in headless mode
+    config.auto_continue = True  # Keep going when the model stops without tool calls
 
     if model:
         config.model_name = model

@@ -442,6 +442,7 @@ HELP_TEXT = f"""\
 {_I}  [cyan]/model[/cyan] [id]      Show available models or switch
 {_I}  [cyan]/effort[/cyan] [level]  Reasoning effort (minimal|low|medium|high|xhigh|max|off)
 {_I}  [cyan]/yolo[/cyan]            Toggle auto-approve mode
+{_I}  [cyan]/autocontinue[/cyan]    Toggle auto-continue (keep agent working)
 {_I}  [cyan]/status[/cyan]          Current model & turn count
 {_I}  [cyan]/quit[/cyan]            Exit"""
 
