@@ -530,6 +530,7 @@ class Handlers:
 
         # Agentic loop - continue until model doesn't call tools or max iterations is reached
         iteration = 0
+        _consecutive_nudges = 0
         final_response = None
         errored = False
         max_iterations = session.config.max_iterations
@@ -668,26 +669,42 @@ class Handlers:
                         session.context_manager.add_message(assistant_msg, token_count)
                         final_response = content
 
-                    if session.config.auto_continue:
-                        session.context_manager.add_message(
-                            Message(
-                                role="user",
-                                content=(
-                                    "[SYSTEM: You stopped without calling any tools. "
-                                    "A text-only response ends the agent loop — there is no human to re-prompt you. "
-                                    "Keep working: check your plan, verify outputs, iterate on results, "
-                                    "or research further improvements. You MUST call at least one tool.]"
-                                ),
+                    _MAX_CONSECUTIVE_NUDGES = 10
+                    if session.config.auto_continue and _consecutive_nudges < _MAX_CONSECUTIVE_NUDGES:
+                        _consecutive_nudges += 1
+                        if _consecutive_nudges <= 2:
+                            nudge = (
+                                "[SYSTEM: You stopped without calling any tools. "
+                                "A text-only response ends the agent loop — there is no human to re-prompt you. "
+                                "Keep working: check your plan, verify outputs, iterate on results, "
+                                "or research further improvements. You MUST call at least one tool.]"
                             )
+                        else:
+                            nudge = (
+                                "[SYSTEM: You have stopped without tool calls multiple times in a row. "
+                                "There is no human watching — you must keep yourself going. "
+                                "If your original task list is complete, move on to the NEXT phase:\n"
+                                "  1. Review and improve all results (re-run experiments with better hyperparameters, try ensemble methods, etc.)\n"
+                                "  2. Create or update a comprehensive write-up / report document covering methodology, results, analysis, and future work\n"
+                                "  3. Clean up, document, and commit all code and outputs\n"
+                                "  4. Push improvements — there is always something to improve (presentation, robustness, additional baselines, ablation studies)\n"
+                                "Pick the most impactful next action and call a tool NOW.]"
+                            )
+                        session.context_manager.add_message(
+                            Message(role="user", content=nudge)
                         )
                         await session.send_event(Event(
                             event_type="tool_log",
-                            data={"tool": "system", "log": "Auto-continue: nudging agent to keep working"},
+                            data={"tool": "system", "log": f"Auto-continue: nudging agent to keep working (attempt {_consecutive_nudges})"},
                         ))
-                        iteration += 1
+                        # Don't count nudges toward max_iterations — only real
+                        # tool-call iterations should consume the budget.
                         continue
 
                     break
+
+                # Model produced tool calls — reset the nudge counter
+                _consecutive_nudges = 0
 
                 # Validate tool call args (one json.loads per call, once)
                 # and split into good vs bad
