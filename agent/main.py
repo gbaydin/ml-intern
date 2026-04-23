@@ -1228,6 +1228,8 @@ def cli():
     import warnings
     # Suppress aiohttp "Unclosed client session" noise during event loop teardown
     _logging.getLogger("asyncio").setLevel(_logging.CRITICAL)
+    # Suppress noisy LiteLLM "Dropping 'thinking' param" warnings on Bedrock converse path
+    _logging.getLogger("LiteLLM").setLevel(_logging.ERROR)
     # Suppress litellm pydantic deprecation warnings
     warnings.filterwarnings("ignore", category=DeprecationWarning, module="litellm")
     # Suppress whoosh invalid escape sequence warnings (third-party, unfixed upstream)
