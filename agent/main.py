@@ -1242,7 +1242,15 @@ def cli():
                         help="Max LLM requests per turn (default: 50, use -1 for unlimited)")
     parser.add_argument("--no-stream", action="store_true",
                         help="Disable token streaming (use non-streaming LLM calls)")
+    parser.add_argument("--no-log", action="store_true",
+                        help="Disable session logging to file")
     args = parser.parse_args()
+
+    # Install log tee before anything prints
+    cleanup_log = None
+    if not args.no_log:
+        from agent.utils.log_tee import install_log_tee
+        cleanup_log = install_log_tee()
 
     try:
         if args.prompt:
@@ -1254,6 +1262,9 @@ def cli():
             asyncio.run(main())
     except KeyboardInterrupt:
         print("\n\nGoodbye!")
+    finally:
+        if cleanup_log:
+            cleanup_log()
 
 
 if __name__ == "__main__":
