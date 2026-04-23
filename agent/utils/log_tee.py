@@ -13,7 +13,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x07|\r")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\].*?\x07")
+_CURSOR_MOVE_RE = re.compile(r"\x1b\[\d*[ABJH]")
 
 
 def _strip_ansi(text: str) -> str:
@@ -23,20 +24,35 @@ def _strip_ansi(text: str) -> str:
 class TeeFile(io.TextIOBase):
     """Wraps an original stream and copies every write to a log file (stripped
     of ANSI escapes).  Proxies all attributes the original has so that
-    Rich Console, prompt_toolkit, and plain ``print()`` all keep working."""
+    Rich Console, prompt_toolkit, and plain ``print()`` all keep working.
+
+    Only final line content reaches the log — animation frames (shimmer,
+    particle logo, sub-agent redraws) are discarded by treating ``\\r`` as
+    "discard this line" and cursor-movement ANSI as "skip this write".
+    """
 
     def __init__(self, original: io.TextIOBase, log_file: io.TextIOWrapper):
         self._original = original
         self._log = log_file
+        self._line_buf = ""
 
     # ── Core write path ──────────────────────────────────────────────
     def write(self, s: str) -> int:
         n = self._original.write(s)
         try:
-            clean = _strip_ansi(s)
-            if clean:
-                self._log.write(clean)
-                self._log.flush()
+            if _CURSOR_MOVE_RE.search(s):
+                self._line_buf = ""
+                return n
+            self._line_buf += s
+            while "\n" in self._line_buf:
+                line, self._line_buf = self._line_buf.split("\n", 1)
+                line = line.rsplit("\r", 1)[-1]
+                clean = _strip_ansi(line)
+                if clean.strip():
+                    self._log.write(clean + "\n")
+            if "\r" in self._line_buf:
+                self._line_buf = self._line_buf.rsplit("\r", 1)[-1]
+            self._log.flush()
         except Exception:
             pass
         return n

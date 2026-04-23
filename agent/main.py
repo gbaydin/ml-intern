@@ -970,6 +970,9 @@ async def main():
             # Ctrl+C during the next turn should start a fresh arming.
             interrupt_state["last"] = 0.0
 
+            # Echo to log (prompt_toolkit bypasses stdout, so the tee misses it)
+            print(f"> {user_input}", file=sys.stderr)
+
             # Check for exit commands
             if user_input.strip().lower() in ["exit", "quit", "/quit", "/exit"]:
                 break
