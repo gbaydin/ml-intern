@@ -106,10 +106,31 @@ def _is_inline_python(command: str) -> bool:
     return bool(re.match(r'python3?\s+.*-c\s', stripped))
 
 
+MAX_SLEEP_SECONDS = 300
+
+
+def _reject_long_sleep(command: str) -> str | None:
+    """Return an error message if the command starts with a long sleep."""
+    m = re.match(r'^\s*sleep\s+(\d+)', command)
+    if m and int(m.group(1)) > MAX_SLEEP_SECONDS:
+        return (
+            f"REJECTED: `sleep {m.group(1)}` blocks the agent loop — you cannot "
+            f"do any other work while it runs. Instead, check on the process now "
+            f"(tail the log, kill -0 <PID>) and do productive work (update the "
+            f"paper, analyze results, clean up code) while waiting."
+        )
+    return None
+
+
 async def _bash_handler(args: dict[str, Any], **_kw) -> tuple[str, bool]:
     command = args.get("command", "")
     if not command:
         return "No command provided.", False
+
+    rejection = _reject_long_sleep(command)
+    if rejection:
+        return rejection, False
+
     work_dir = args.get("work_dir", ".")
     timeout = min(args.get("timeout") or DEFAULT_TIMEOUT, MAX_TIMEOUT)
 
@@ -399,6 +420,11 @@ _LOCAL_TOOL_SPECS = {
             "Then check status:\n"
             "  kill -0 <PID> 2>/dev/null && echo 'running' || echo 'done'\n"
             "  tail -n 50 /tmp/output.log\n"
+            "\n"
+            "⚠ NEVER use `sleep` to wait for a process. `sleep` blocks the entire agent "
+            "loop — you cannot do any other work while it runs. Instead, check status "
+            "quickly (tail/kill -0) and if the process isn't done, end the turn with a "
+            "text summary. Do productive work (write paper, analyze results) while waiting.\n"
             "\n"
             "Timeout default 120s, max 36000s. Inline `python -c` capped at 1800s."
         ),
