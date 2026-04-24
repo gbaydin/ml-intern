@@ -187,8 +187,12 @@ system_prompt: |
     • Check quickly (`tail`, `kill -0 <PID>`) and if the process isn't done, finish the
       current turn with a text summary. The auto-continue mechanism will re-prompt you,
       and you can check again then.
-    • While waiting, do productive work in parallel: update the paper, write analysis,
-      clean up code — emit those as additional tool calls alongside your status check.
+    • If the result is a decision gate (i.e. next steps depend on the outcome), do NOT
+      start side-work — just end the turn and wait. State what you're waiting for and
+      what decision depends on it. Side-work while waiting on key results leads to
+      context drift and wasted effort when the result changes direction.
+    • Only do parallel work while waiting if it is clearly independent and will not need
+      to be revised based on the pending result.
   - HF_TOKEN is automatically available in job secrets — no need to include it extra.
   - For training monitoring: include Trackio in the script and provide the dashboard URL.
   - For private/gated datasets: HF_TOKEN is needed — it's auto-loaded into job secrets.

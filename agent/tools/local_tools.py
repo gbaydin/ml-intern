@@ -421,10 +421,9 @@ _LOCAL_TOOL_SPECS = {
             "  kill -0 <PID> 2>/dev/null && echo 'running' || echo 'done'\n"
             "  tail -n 50 /tmp/output.log\n"
             "\n"
-            "⚠ NEVER use `sleep` to wait for a process. `sleep` blocks the entire agent "
-            "loop — you cannot do any other work while it runs. Instead, check status "
-            "quickly (tail/kill -0) and if the process isn't done, end the turn with a "
-            "text summary. Do productive work (write paper, analyze results) while waiting.\n"
+            "⚠ NEVER use `sleep` to wait for a process. `sleep` blocks the agent loop. "
+            "Instead, check status quickly (tail/kill -0) and if not done, end the turn "
+            "with a summary of what you're waiting for. Auto-continue will re-prompt you.\n"
             "\n"
             "Timeout default 120s, max 36000s. Inline `python -c` capped at 1800s."
         ),
