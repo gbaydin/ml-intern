@@ -566,13 +566,64 @@ _LOCAL_TOOL_SPECS = {
             },
         },
     },
+    "wait": {
+        "description": (
+            "Wait for a specified duration before continuing. Use this when a "
+            "background process (training, evaluation) is running and you need "
+            "to check back later. The reason you provide will be echoed back to "
+            "you when the wait completes, so you remember what to check.\n"
+            "\n"
+            "Use this instead of `sleep` in bash — it doesn't tie up a shell process "
+            "and it reminds you why you were waiting.\n"
+            "\n"
+            "Max wait: 1800s (30 minutes)."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["seconds", "reason"],
+            "additionalProperties": False,
+            "properties": {
+                "seconds": {
+                    "type": "integer",
+                    "description": "How many seconds to wait (max 1800).",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "Why you are waiting and what to check when the wait ends. "
+                        "Be specific: name the process, log file, and what decision "
+                        "depends on the result."
+                    ),
+                },
+            },
+        },
+    },
 }
+
+MAX_WAIT_SECONDS = 1800
+
+
+async def _wait_handler(args: dict[str, Any], **_kw) -> tuple[str, bool]:
+    """Sleep for a requested duration, then return a reminder of what to check."""
+    seconds = min(args.get("seconds", 60), MAX_WAIT_SECONDS)
+    reason = args.get("reason", "")
+    if seconds < 1:
+        return "Wait duration must be at least 1 second.", False
+    await asyncio.sleep(seconds)
+    elapsed = f"{seconds // 60}m{seconds % 60:02d}s" if seconds >= 60 else f"{seconds}s"
+    msg = f"Waited {elapsed}."
+    if reason:
+        msg += f" You were waiting because: {reason}"
+    msg += " Check the status now."
+    return msg, True
+
 
 _HANDLERS = {
     "bash": _bash_handler,
     "read": _read_handler,
     "write": _write_handler,
     "edit": _edit_handler,
+    "wait": _wait_handler,
 }
 
 

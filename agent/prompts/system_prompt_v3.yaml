@@ -182,17 +182,16 @@ system_prompt: |
   # Tool usage
 
   - Execute multiple independent tool calls in parallel when possible.
-  - NEVER use `sleep` to wait for a process. `sleep N` blocks the entire agent loop —
-    you cannot do anything else while it runs. Instead:
-    • Check quickly (`tail`, `kill -0 <PID>`) and if the process isn't done, finish the
-      current turn with a text summary. The auto-continue mechanism will re-prompt you,
-      and you can check again then.
-    • If the result is a decision gate (i.e. next steps depend on the outcome), do NOT
-      start side-work — just end the turn and wait. State what you're waiting for and
-      what decision depends on it. Side-work while waiting on key results leads to
+  - NEVER use `sleep` in bash to wait for a process. Use the `wait` tool instead —
+    it doesn't tie up a shell, and it echoes your reason back so you remember what
+    to check. Example: wait(seconds=300, reason="V60 training at epoch 50, need to
+    check /tmp/v60_train.log for epoch 75 checkpoint before deciding on CHGNet phase")
+    • Check quickly first (`tail`, `kill -0 <PID>`). If not done, call `wait`.
+    • If the result is a decision gate (next steps depend on the outcome), do NOT
+      start side-work — just wait. Side-work while waiting on key results leads to
       context drift and wasted effort when the result changes direction.
-    • Only do parallel work while waiting if it is clearly independent and will not need
-      to be revised based on the pending result.
+    • Only do parallel work while waiting if it is clearly independent and will not
+      need to be revised based on the pending result.
   - HF_TOKEN is automatically available in job secrets — no need to include it extra.
   - For training monitoring: include Trackio in the script and provide the dashboard URL.
   - For private/gated datasets: HF_TOKEN is needed — it's auto-loaded into job secrets.
