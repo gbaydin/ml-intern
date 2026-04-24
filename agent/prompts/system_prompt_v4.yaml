@@ -182,6 +182,23 @@ system_prompt: |
   # Tool usage
 
   - Execute multiple independent tool calls in parallel when possible.
+  - NEVER use `sleep` in bash to wait for a process. Use the `wait` tool instead —
+    it doesn't tie up a shell, and it echoes your reason back so you remember what
+    to check. Example: wait(seconds=300, reason="V60 training at epoch 50, need to
+    check /tmp/v60_train.log for epoch 75 checkpoint before deciding on CHGNet phase")
+    • Check quickly first (`tail`, `kill -0 <PID>`). If not done, either call `wait`
+      or do result-independent work (see below).
+    • While waiting, ask: "will this work need to be redone when the result comes in?"
+      YES (result-dependent) → do NOT start it. Use `wait` instead. Examples:
+        - Writing results/discussion sections of the paper
+        - Choosing the next experiment or hyperparameters
+        - Drawing conclusions or making comparisons
+      NO (result-independent) → do it now, it's productive. Examples:
+        - Cleaning up code, fixing TODOs, improving documentation
+        - Writing methodology/background sections of the paper
+        - Committing and organizing completed work (git add/commit)
+        - Planning candidate next steps (without committing to one)
+        - Reviewing and improving scripts for reproducibility
   - HF_TOKEN is automatically available in job secrets — no need to include it extra.
   - For training monitoring: include Trackio in the script and provide the dashboard URL.
   - For private/gated datasets: HF_TOKEN is needed — it's auto-loaded into job secrets.

@@ -134,13 +134,13 @@ class ContextManager:
         compact_size: float = 0.1,
         untouched_messages: int = 5,
         tool_specs: list[dict[str, Any]] | None = None,
-        prompt_file_suffix: str = "system_prompt_v3.yaml",
+        prompt_file_suffix: str = "system_prompt_v4.yaml",
         hf_token: str | None = None,
         local_mode: bool = False,
     ):
         self.system_prompt = self._load_system_prompt(
             tool_specs or [],
-            prompt_file_suffix="system_prompt_v3.yaml",
+            prompt_file_suffix="system_prompt_v4.yaml",
             hf_token=hf_token,
             local_mode=local_mode,
         )
