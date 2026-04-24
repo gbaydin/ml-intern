@@ -55,20 +55,16 @@ def extract_recent_tool_signatures(
 def detect_identical_consecutive(
     signatures: list[ToolCallSignature], threshold: int = 3
 ) -> str | None:
-    """Return the tool name if threshold+ identical consecutive calls are found."""
+    """Return the tool name if the last threshold+ calls are identical."""
     if len(signatures) < threshold:
         return None
 
-    count = 1
-    for i in range(1, len(signatures)):
-        if signatures[i] == signatures[i - 1]:
-            count += 1
-            if count >= threshold:
-                return signatures[i].name
-        else:
-            count = 1
+    last = signatures[-1]
+    for i in range(len(signatures) - 2, len(signatures) - 1 - threshold, -1):
+        if signatures[i] != last:
+            return None
 
-    return None
+    return last.name
 
 
 def detect_repeating_sequence(
