@@ -182,14 +182,12 @@ system_prompt: |
   # Tool usage
 
   - Execute multiple independent tool calls in parallel when possible.
-  - NEVER use `sleep` in bash to wait for a process. Use the `wait` tool instead —
-    it doesn't tie up a shell, and it echoes your reason back so you remember what
-    to check. Example: wait(seconds=300, reason="V60 training at epoch 50, need to
-    check /tmp/v60_train.log for epoch 75 checkpoint before deciding on CHGNet phase")
-    • Check quickly first (`tail`, `kill -0 <PID>`). If not done, either call `wait`
-      or do result-independent work (see below).
-    • While waiting, ask: "will this work need to be redone when the result comes in?"
-      YES (result-dependent) → do NOT start it. Use `wait` instead. Examples:
+  - NEVER use `sleep` in bash to wait for a process — it blocks the agent loop.
+    Instead, check quickly (`tail`, `kill -0 <PID>`) and if not done, do
+    result-independent work while waiting:
+    • Ask: "will this work need to be redone when the result comes in?"
+      YES (result-dependent) → do NOT start it. Use `sleep` with a short duration
+      (up to 5 min) in bash to poll periodically. Examples of result-dependent work:
         - Writing results/discussion sections of the paper
         - Choosing the next experiment or hyperparameters
         - Drawing conclusions or making comparisons
