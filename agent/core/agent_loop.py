@@ -490,6 +490,16 @@ async def _call_llm_non_streaming(session: Session, messages, tools, llm_params)
     )
 
 
+def _get_initial_user_prompt(session: Session) -> str | None:
+    """Return the first user message from the conversation, or None."""
+    for msg in session.context_manager.items:
+        if getattr(msg, "role", None) == "user":
+            content = getattr(msg, "content", None)
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+    return None
+
+
 class Handlers:
     """Handler functions for each operation type"""
 
@@ -709,9 +719,21 @@ class Handlers:
                                 "or research further improvements. You MUST call at least one tool.]"
                             )
                         else:
+                            initial_prompt = _get_initial_user_prompt(session)
+                            revisit_block = ""
+                            if initial_prompt:
+                                revisit_block = (
+                                    "\n\nIMPORTANT — here is the ORIGINAL user request. "
+                                    "Re-read it carefully and check whether you missed anything "
+                                    "or can improve on what you've done so far:\n"
+                                    "--- BEGIN ORIGINAL REQUEST ---\n"
+                                    f"{initial_prompt}\n"
+                                    "--- END ORIGINAL REQUEST ---\n"
+                                )
                             nudge = (
                                 "[SYSTEM: You have stopped without tool calls multiple times in a row. "
-                                "There is no human watching — you must keep yourself going. "
+                                "There is no human watching — you must keep yourself going."
+                                f"{revisit_block}\n"
                                 "If your original task list is complete, move on to the NEXT phase:\n"
                                 "  1. Review and improve all results (re-run experiments with better hyperparameters, try ensemble methods, etc.)\n"
                                 "  2. Create or update a comprehensive write-up / report document covering methodology, results, analysis, and future work\n"
