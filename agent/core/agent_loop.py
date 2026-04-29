@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 from dataclasses import dataclass
 
 from litellm import ChatCompletionMessageToolCall, Message, acompletion
@@ -116,16 +117,24 @@ def _needs_approval(
 
 
 # -- LLM retry constants --------------------------------------------------
-_MAX_LLM_RETRIES = 3
-_LLM_RETRY_DELAYS = [5, 15, 30]  # seconds between retries
+_MAX_LLM_RETRIES = 8
+_LLM_BASE_DELAY = 5  # seconds
+_LLM_MAX_DELAY = 120  # cap per retry
+
+
+def _is_rate_limit(error: Exception) -> bool:
+    """Return True for 429 / rate-limit errors specifically."""
+    err_str = str(error).lower()
+    return any(p in err_str for p in ("429", "rate limit", "rate_limit"))
 
 
 def _is_transient_error(error: Exception) -> bool:
     """Return True for errors that are likely transient and worth retrying."""
+    if _is_rate_limit(error):
+        return True
     err_str = str(error).lower()
     transient_patterns = [
         "timeout", "timed out",
-        "429", "rate limit", "rate_limit",
         "503", "service unavailable",
         "502", "bad gateway",
         "500", "internal server error",
@@ -134,6 +143,15 @@ def _is_transient_error(error: Exception) -> bool:
         "eof", "broken pipe",
     ]
     return any(pattern in err_str for pattern in transient_patterns)
+
+
+def _retry_delay(attempt: int, is_rate_limit: bool) -> float:
+    """Exponential backoff with jitter. More aggressive for rate limits."""
+    base = _LLM_BASE_DELAY * (2 ** attempt)
+    if is_rate_limit:
+        base *= 2
+    capped = min(base, _LLM_MAX_DELAY)
+    return capped + random.uniform(0, capped * 0.25)
 
 
 def _is_effort_config_error(error: Exception) -> bool:
@@ -379,14 +397,16 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
                 ))
                 continue
             if _llm_attempt < _MAX_LLM_RETRIES - 1 and _is_transient_error(e):
-                _delay = _LLM_RETRY_DELAYS[_llm_attempt]
+                rl = _is_rate_limit(e)
+                _delay = _retry_delay(_llm_attempt, rl)
                 logger.warning(
-                    "Transient LLM error (attempt %d/%d): %s — retrying in %ds",
+                    "Transient LLM error (attempt %d/%d): %s — retrying in %.0fs",
                     _llm_attempt + 1, _MAX_LLM_RETRIES, e, _delay,
                 )
+                label = "Rate limited" if rl else "LLM connection error"
                 await session.send_event(Event(
                     event_type="tool_log",
-                    data={"tool": "system", "log": f"LLM connection error, retrying in {_delay}s..."},
+                    data={"tool": "system", "log": f"{label}, retrying in {_delay:.0f}s (attempt {_llm_attempt + 1}/{_MAX_LLM_RETRIES})..."},
                 ))
                 await asyncio.sleep(_delay)
                 continue
@@ -422,14 +442,16 @@ async def _call_llm_non_streaming(session: Session, messages, tools, llm_params)
                 ))
                 continue
             if _llm_attempt < _MAX_LLM_RETRIES - 1 and _is_transient_error(e):
-                _delay = _LLM_RETRY_DELAYS[_llm_attempt]
+                rl = _is_rate_limit(e)
+                _delay = _retry_delay(_llm_attempt, rl)
                 logger.warning(
-                    "Transient LLM error (attempt %d/%d): %s — retrying in %ds",
+                    "Transient LLM error (attempt %d/%d): %s — retrying in %.0fs",
                     _llm_attempt + 1, _MAX_LLM_RETRIES, e, _delay,
                 )
+                label = "Rate limited" if rl else "LLM connection error"
                 await session.send_event(Event(
                     event_type="tool_log",
-                    data={"tool": "system", "log": f"LLM connection error, retrying in {_delay}s..."},
+                    data={"tool": "system", "log": f"{label}, retrying in {_delay:.0f}s (attempt {_llm_attempt + 1}/{_MAX_LLM_RETRIES})..."},
                 ))
                 await asyncio.sleep(_delay)
                 continue
