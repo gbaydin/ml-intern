@@ -50,6 +50,10 @@ from agent.tools.papers_tool import HF_PAPERS_TOOL_SPEC, hf_papers_handler
 from agent.tools.plan_tool import PLAN_TOOL_SPEC, plan_tool_handler
 from agent.tools.research_tool import RESEARCH_TOOL_SPEC, research_handler
 from agent.tools.sandbox_tool import get_sandbox_tools
+from agent.tools.web_search_tool import (
+    WEB_SEARCH_TOOL_SPEC,
+    web_search_handler,
+)
 
 # NOTE: Private HF repo tool disabled - replaced by hf_repo_files and hf_repo_git
 # from agent.tools.private_hf_repo_tools import (
@@ -63,6 +67,11 @@ warnings.filterwarnings(
 )
 
 NOT_ALLOWED_TOOL_NAMES = ["hf_jobs", "hf_doc_search", "hf_doc_fetch", "hf_whoami"]
+
+# Tools registered in the router (so subagents can call them) but NOT
+# exposed to the main agent's LLM.  Keeps the main agent focused while
+# the research sub-agent can still use them.
+SUBAGENT_ONLY_TOOLS = {"web_search"}
 
 
 def convert_mcp_content_to_string(content: list) -> str:
@@ -192,10 +201,18 @@ class ToolRouter:
         except Exception as e:
             logger.warning("Failed to load OpenAPI search tool: %s", e)
 
-    def get_tool_specs_for_llm(self) -> list[dict[str, Any]]:
-        """Get tool specifications in OpenAI format"""
+    def get_tool_specs_for_llm(self, include_subagent_only: bool = False) -> list[dict[str, Any]]:
+        """Get tool specifications in OpenAI format.
+
+        By default, tools in SUBAGENT_ONLY_TOOLS are excluded so the main
+        agent's LLM never sees them.  The research sub-agent passes
+        ``include_subagent_only=True`` (indirectly, via filtering by
+        RESEARCH_TOOL_NAMES) so it picks them up.
+        """
         specs = []
         for tool in self.tools.values():
+            if not include_subagent_only and tool.name in SUBAGENT_ONLY_TOOLS:
+                continue
             specs.append(
                 {
                     "type": "function",
@@ -289,6 +306,14 @@ def create_builtin_tools(local_mode: bool = False) -> list[ToolSpec]:
             description=RESEARCH_TOOL_SPEC["description"],
             parameters=RESEARCH_TOOL_SPEC["parameters"],
             handler=research_handler,
+        ),
+        # Web search — subagent-only (not exposed to main agent LLM, but
+        # registered so the research sub-agent can call it)
+        ToolSpec(
+            name=WEB_SEARCH_TOOL_SPEC["name"],
+            description=WEB_SEARCH_TOOL_SPEC["description"],
+            parameters=WEB_SEARCH_TOOL_SPEC["parameters"],
+            handler=web_search_handler,
         ),
         # Documentation search tools
         ToolSpec(

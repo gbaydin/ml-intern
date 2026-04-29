@@ -134,13 +134,13 @@ class ContextManager:
         compact_size: float = 0.1,
         untouched_messages: int = 5,
         tool_specs: list[dict[str, Any]] | None = None,
-        prompt_file_suffix: str = "system_prompt_v3.yaml",
+        prompt_file_suffix: str = "system_prompt_v4.yaml",
         hf_token: str | None = None,
         local_mode: bool = False,
     ):
         self.system_prompt = self._load_system_prompt(
             tool_specs or [],
-            prompt_file_suffix="system_prompt_v3.yaml",
+            prompt_file_suffix="system_prompt_v4.yaml",
             hf_token=hf_token,
             local_mode=local_mode,
         )
@@ -246,47 +246,66 @@ class ContextManager:
         ]
 
     def _patch_dangling_tool_calls(self) -> None:
-        """Add stub tool results for any tool_calls that lack a matching result.
+        """Insert stub tool results for any tool_calls that lack a matching result.
 
-        Scans backwards to find the last assistant message with tool_calls,
-        which may not be items[-1] if some tool results were already added.
+        After an interruption (Ctrl+C), the assistant message with tool_calls
+        may be followed by a user message with no tool results in between.
+        Stubs are inserted right after the existing tool results (before any
+        subsequent user message) so the tool_use/tool_result pairing stays
+        adjacent, which Bedrock's converse API requires.
         """
         if not self.items:
             return
 
-        # Find the last assistant message with tool_calls
-        assistant_msg = None
-        for i in range(len(self.items) - 1, -1, -1):
-            msg = self.items[i]
-            if getattr(msg, "role", None) == "assistant" and getattr(
-                msg, "tool_calls", None
-            ):
-                assistant_msg = msg
-                break
-            # Stop scanning once we hit a user message — anything before
-            # that belongs to a previous (complete) turn.
-            if getattr(msg, "role", None) == "user":
-                break
-
-        if not assistant_msg:
-            return
-
-        self._normalize_tool_calls(assistant_msg)
         answered_ids = {
             getattr(m, "tool_call_id", None)
             for m in self.items
             if getattr(m, "role", None) == "tool"
         }
-        for tc in assistant_msg.tool_calls:
-            if tc.id not in answered_ids:
-                self.items.append(
-                    Message(
-                        role="tool",
-                        content="Tool was not executed (interrupted or error).",
-                        tool_call_id=tc.id,
-                        name=tc.function.name,
+
+        patched: list[Message] = []
+        pending_assistant: Message | None = None
+
+        for msg in self.items:
+            role = getattr(msg, "role", None)
+
+            # When we leave the tool-result zone after an assistant message,
+            # inject any missing stubs before the next non-tool message.
+            if pending_assistant and role != "tool":
+                self._normalize_tool_calls(pending_assistant)
+                for tc in pending_assistant.tool_calls:
+                    if tc.id not in answered_ids:
+                        patched.append(
+                            Message(
+                                role="tool",
+                                content="Tool was not executed (interrupted or error).",
+                                tool_call_id=tc.id,
+                                name=tc.function.name,
+                            )
+                        )
+                        answered_ids.add(tc.id)
+                pending_assistant = None
+
+            patched.append(msg)
+
+            if role == "assistant" and getattr(msg, "tool_calls", None):
+                pending_assistant = msg
+
+        # Handle trailing assistant message at end of list
+        if pending_assistant:
+            self._normalize_tool_calls(pending_assistant)
+            for tc in pending_assistant.tool_calls:
+                if tc.id not in answered_ids:
+                    patched.append(
+                        Message(
+                            role="tool",
+                            content="Tool was not executed (interrupted or error).",
+                            tool_call_id=tc.id,
+                            name=tc.function.name,
+                        )
                     )
-                )
+
+        self.items[:] = patched
 
     def undo_last_turn(self) -> bool:
         """Remove the last complete turn (user msg + all assistant/tool msgs that follow).
