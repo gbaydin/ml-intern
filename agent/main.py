@@ -13,6 +13,7 @@ import os
 import signal
 import sys
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -49,6 +50,10 @@ litellm.drop_params = True
 # Suppress the "Give Feedback / Get Help" banner LiteLLM prints to stderr
 # on every error — users don't need it, and our friendly errors cover the case.
 litellm.suppress_debug_info = True
+# Newer models (e.g. GPT-5) return usage fields that litellm's Pydantic
+# schemas don't know about yet, causing noisy PydanticSerializationUnexpectedValue
+# warnings on every LLM call. Safe to silence — the data still round-trips.
+warnings.filterwarnings("ignore", message="Pydantic serializer warnings")
 
 def _safe_get_args(arguments: dict) -> dict:
     """Safely extract args dict from arguments, handling cases where LLM passes string."""
