@@ -316,7 +316,10 @@ async def event_listener(
                 await stream_buf.finish(cancel_event=_cancel_event())
             elif event.event_type == "tool_call":
                 shimmer.stop()
-                stream_buf.discard()
+                if stream_buf._buffer.strip():
+                    await stream_buf.finish(cancel_event=_cancel_event())
+                else:
+                    stream_buf.discard()
                 tool_name = event.data.get("tool", "") if event.data else ""
                 arguments = event.data.get("arguments", {}) if event.data else {}
                 if tool_name:
@@ -1133,7 +1136,10 @@ async def headless_main(
             if content:
                 await print_markdown(content, instant=True)
         elif event.event_type == "tool_call":
-            stream_buf.discard()
+            if stream_buf._buffer.strip():
+                await stream_buf.finish(instant=True)
+            else:
+                stream_buf.discard()
             tool_name = event.data.get("tool", "") if event.data else ""
             arguments = event.data.get("arguments", {}) if event.data else {}
             if tool_name:
