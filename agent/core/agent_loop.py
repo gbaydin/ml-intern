@@ -353,6 +353,13 @@ async def _call_llm_streaming(session: Session, messages, tools, llm_params) -> 
                 if choice.finish_reason:
                     finish_reason = choice.finish_reason
 
+                reasoning = getattr(delta, "reasoning_content", None)
+                if reasoning:
+                    full_content += reasoning
+                    await session.send_event(
+                        Event(event_type="assistant_chunk", data={"content": reasoning})
+                    )
+
                 if delta.content:
                     full_content += delta.content
                     await session.send_event(
