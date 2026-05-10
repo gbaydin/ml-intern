@@ -24,6 +24,7 @@ from prompt_toolkit import PromptSession
 from agent.config import load_config
 from agent.core.agent_loop import submission_loop
 from agent.core import model_switcher
+from agent.core.local_models import is_local_model_id
 from agent.core.session import OpType
 from agent.core.tools import ToolRouter
 from agent.utils.reliability_checks import check_training_script_save_pattern
@@ -820,7 +821,7 @@ async def _handle_slash_command(
     return None
 
 
-async def main():
+async def main(model: str | None = None):
     """Interactive chat with the agent"""
 
     # Clear screen
@@ -829,9 +830,14 @@ async def main():
     # Create prompt session for input (needed early for token prompt)
     prompt_session = PromptSession()
 
-    # HF token — required, prompt if missing
+    config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
+    config = load_config(config_path)
+    if model:
+        config.model_name = model
+
+    # HF token — required for Hub-backed models/tools, but not for local LLMs.
     hf_token = _get_hf_token()
-    if not hf_token:
+    if not hf_token and not is_local_model_id(config.model_name):
         hf_token = await _prompt_and_save_hf_token(prompt_session)
 
     # Resolve username for banner
@@ -857,10 +863,6 @@ async def main():
     turn_complete_event = asyncio.Event()
     turn_complete_event.set()
     ready_event = asyncio.Event()
-
-    # Start agent loop in background
-    config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
-    config = load_config(config_path)
 
     # Create tool router with local mode
     tool_router = ToolRouter(config.mcpServers, hf_token=hf_token, local_mode=True)
@@ -1054,13 +1056,6 @@ async def headless_main(
 
     logging.basicConfig(level=logging.WARNING)
 
-    hf_token = _get_hf_token()
-    if not hf_token:
-        print("ERROR: No HF token found. Set HF_TOKEN or run `huggingface-cli login`.", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"HF token loaded", file=sys.stderr)
-
     config_path = Path(__file__).parent.parent / "configs" / "main_agent_config.json"
     config = load_config(config_path)
     config.yolo_mode = True  # Auto-approve everything in headless mode
@@ -1068,6 +1063,17 @@ async def headless_main(
 
     if model:
         config.model_name = model
+
+    hf_token = _get_hf_token()
+    if not hf_token and not is_local_model_id(config.model_name):
+        print(
+            "ERROR: No HF token found. Set HF_TOKEN or run `huggingface-cli login`.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if hf_token:
+        print("HF token loaded", file=sys.stderr)
 
     if max_iterations is not None:
         config.max_iterations = max_iterations
@@ -1273,7 +1279,7 @@ def cli():
                 max_iter = 10_000  # effectively unlimited
             asyncio.run(headless_main(args.prompt, model=args.model, max_iterations=max_iter, stream=not args.no_stream))
         else:
-            asyncio.run(main())
+            asyncio.run(main(model=args.model))
     except KeyboardInterrupt:
         print("\n\nGoodbye!")
     finally:
